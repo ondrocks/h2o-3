@@ -134,7 +134,7 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
     if (_ncolExp > MAX_COLS_EXPANDED) {
       warn("_train", "_train has " + _ncolExp + " columns when categoricals are expanded. " +
               "Algorithm may be slow.  Do not use the Randomized method for wide dataset which can be slow.  " +
-              "Choose Power or GramSVD instead.");
+              "Choose Power instead.");
     }
 
     if(_parms._nv < 1 || _parms._nv > _ncolExp)
