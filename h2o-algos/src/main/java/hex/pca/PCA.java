@@ -60,11 +60,13 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
     boolean useGramSVD = _parms._pca_method == PCAParameters.Method.GramSVD;
     boolean usePower = _parms._pca_method == PCAParameters.Method.Power;
     boolean useRandomized = _parms._pca_method == PCAParameters.Method.Randomized;
+    double gramSize =  _train.lastVec().nChunks()==1 ? 1 :
+            Math.log((double) _train.lastVec().nChunks()) / Math.log(2.); // gets to zero if nChunks=1
 
     long mem_usage = (useGramSVD || usePower || useRandomized) ? (long) (hb._cpus_allowed * p * p * 8/*doubles*/ *
-            Math.log((double) _train.lastVec().nChunks()) / Math.log(2.)) : 1; //one gram per core
+            gramSize) : 1; //one gram per core
     long mem_usage_w = (useGramSVD || usePower) ? (long) (hb._cpus_allowed * r * r *
-            8/*doubles*/ * Math.log((double) _train.lastVec().nChunks()) / Math.log(2.)) : 1;
+            8/*doubles*/ * gramSize) : 1;
 
     if (useRandomized) {
       mem_usage_w = mem_usage;
