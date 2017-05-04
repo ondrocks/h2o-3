@@ -6,6 +6,7 @@ import hex.Model;
 import hex.ModelBuilder;
 import hex.StackedEnsembleModel;
 import hex.deeplearning.DeepLearningModel;
+import hex.deepwater.DeepWater;
 import hex.deepwater.DeepWaterParameters;
 import hex.glm.GLMModel;
 import hex.grid.Grid;
@@ -807,12 +808,6 @@ public final class AutoML extends Lockable<AutoML> implements TimedH2ORunnable {
     isClassification = frameMetadata.isClassification();
 
     ///////////////////////////////////////////////////////////
-    // build a DeepWater model
-    ///////////////////////////////////////////////////////////
-    Job<DeepWaterModel>defaultDeepWaterJob = defaulDeepWater();
-    pollAndUpdateProgress(Stage.ModelTraining, "Default DeepWater build", 50, this.job(), defaultDeepWaterJob, JobType.ModelBuild);
-
-    ///////////////////////////////////////////////////////////
     // build a fast RF with default settings...
     ///////////////////////////////////////////////////////////
     Job<DRFModel>defaultRandomForestJob = defaultRandomForest();
@@ -866,6 +861,14 @@ public final class AutoML extends Lockable<AutoML> implements TimedH2ORunnable {
     // TODO: run for only part of the remaining time?
     Job<Grid>dlJob3 = defaultSearchDL3();
     pollAndUpdateProgress(Stage.ModelTraining, "DeepLearning hyperparameter search 3", 300, this.job(), dlJob3, JobType.HyperparamSearch);
+
+    ///////////////////////////////////////////////////////////
+    // build a DeepWater model
+    ///////////////////////////////////////////////////////////
+    if (DeepWater.haveBackend()) {
+      Job<DeepWaterModel> defaultDeepWaterJob = defaulDeepWater();
+      pollAndUpdateProgress(Stage.ModelTraining, "Default DeepWater build", 50, this.job(), defaultDeepWaterJob, JobType.ModelBuild);
+    }
 
 
     ///////////////////////////////////////////////////////////
