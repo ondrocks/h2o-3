@@ -770,7 +770,7 @@ public final class AutoML extends Lockable<AutoML> implements TimedH2ORunnable {
 
     deepWaterParameters._stopping_tolerance = this.buildSpec.build_control.stopping_criteria.stopping_tolerance();
 
-    Job deepWaterJob = trainModel(null, "drf", deepWaterParameters);
+    Job deepWaterJob = trainModel(null, "deepwater", deepWaterParameters);
     return deepWaterJob;
   }
 
