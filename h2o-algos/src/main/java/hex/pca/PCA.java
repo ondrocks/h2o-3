@@ -65,12 +65,9 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
 
     long mem_usage = (useGramSVD || usePower || useRandomized) ? (long) (hb._cpus_allowed * p * p * 8/*doubles*/ *
             gramSize) : 1; //one gram per core
-    long mem_usage_w = (useGramSVD || usePower) ? (long) (hb._cpus_allowed * r * r *
+    long mem_usage_w = (useGramSVD || usePower || useRandomized) ? (long) (hb._cpus_allowed * r * r *
             8/*doubles*/ * gramSize) : 1;
 
-    if (useRandomized) {
-      mem_usage_w = mem_usage;
-    }
     long max_mem = hb.get_free_mem();
 
     if ((mem_usage > max_mem) && (mem_usage_w > max_mem)) {
@@ -123,11 +120,11 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       error("_use_all_factor_levels", "GLRM only implemented for _use_all_factor_levels = true");
     }
 
-    if (_parms._pca_method != PCAParameters.Method.GLRM && expensive && error_count() == 0) {
+/*    if (_parms._pca_method != PCAParameters.Method.GLRM && expensive && error_count() == 0) {
       if (!(_train.hasNAs()) || _parms._impute_missing)  {
         checkMemoryFootPrint();  // perform memory check here if dataset contains no NAs or if impute_missing enabled
       }
-    }
+    }*/
   }
 
   class PCADriver extends Driver {
@@ -259,9 +256,19 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       Gram gram = null;
 
       try {
+        checkMemoryFootPrint();   // check memory footprint here
+        if (_wideDataset && _train.anyVec().nChunks()==1 && (_parms._pca_method == PCAParameters.Method.GramSVD ||
+                _parms._pca_method == PCAParameters.Method.Power)) { // disable re-balance which spread chunks around.
+          _parms._auto_rebalance = false; // GLRM, Randomized does not care about this.
+        }
         init(true);   // Initialize parameters
         if (error_count() > 0) {
           throw new IllegalArgumentException("Found validation errors: " + validationErrors());
+        }
+
+        if (_wideDataset) {
+          warn("_train", "If PCA runs slow, try to set chunk_size to be higher than the dataset " +
+                  "file size during dataset parsing.");
         }
 
         // The model to be built

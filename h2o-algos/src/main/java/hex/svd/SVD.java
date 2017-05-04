@@ -93,11 +93,8 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
             Math.log((double) _train.lastVec().nChunks()) / Math.log(2.); // gets to zero if nChunks=1
     long mem_usage = (useGramSVD || usePower || useRandomized) ? (long) (hb._cpus_allowed * p * p * 8/*doubles*/
             * gramSize) : 1; //one gram per core
-    long mem_usage_w = (useGramSVD || usePower) ? (long) (hb._cpus_allowed * r * r * 8/*doubles*/
+    long mem_usage_w = (useGramSVD || usePower || useRandomized) ? (long) (hb._cpus_allowed * r * r * 8/*doubles*/
             * gramSize) : 1; //one gram per core
-    if (useRandomized) {
-      mem_usage_w = mem_usage;
-    }
     long max_mem = hb.get_free_mem();
 
     if ((mem_usage > max_mem) && (mem_usage_w > max_mem)) {
@@ -134,17 +131,18 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
     if (_ncolExp > MAX_COLS_EXPANDED) {
       warn("_train", "_train has " + _ncolExp + " columns when categoricals are expanded. " +
               "Algorithm may be slow.  Do not use the Randomized method for wide dataset which can be slow.  " +
-              "Choose Power instead.");
+              "Choose Power instead.  If SVD still runs slow, try to set chunk_size to be higher than dataset file " +
+              "size during dataset parsing.");
     }
 
     if(_parms._nv < 1 || _parms._nv > _ncolExp)
       error("_nv", "Number of right singular values must be between 1 and " + _ncolExp);
 
-    if (expensive && error_count() == 0) {
+/*    if (expensive && error_count() == 0) {
       if (!(_train.hasNAs()) || _parms._impute_missing)  {
         checkMemoryFootPrint();  // perform memory check here if dataset contains no NAs or if impute_missing enabled
       }
-    }
+    }*/
   }
 
   // Compute ivv_sum - vec * vec' for symmetric array ivv_sum
@@ -255,6 +253,7 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
     private Frame randSubIterInPlace(DataInfo dinfo, SVDModel model) {
       DataInfo yinfo = null;
       Frame yqfrm = null;
+      double[][] atq =null;
 
       try {
         // 1) Initialize Y = AG where G ~ N(0,1) and compute Y = QR factorization
@@ -275,6 +274,7 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
         yinfo = new DataInfo(yqfrm, null, true, DataInfo.TransformType.NONE, true, false, false);
         DKV.put(yinfo._key, yinfo);
         LinearAlgebraUtils.computeQInPlace(_job._key, yinfo);
+        atq = new double[_ncolExp][_parms._nv];
 
         model._output._iterations = 0;
         while (model._output._iterations < _parms._max_iterations) {
@@ -282,7 +282,7 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
           _job.update(1, "Iteration " + String.valueOf(model._output._iterations+1) + " of randomized subspace iteration");
 
           // 2) Form \tilde{Y}_j = A'Q_{j-1} and compute \tilde{Y}_j = \tilde{Q}_j \tilde{R}_j factorization
-          SMulTask stsk = new SMulTask(dinfo, _parms._nv);
+          SMulTask stsk = new SMulTask(dinfo, _parms._nv, atq);
           stsk.doAll(aqfrm);
 
           Matrix ysmall = new Matrix(stsk._atq);
@@ -459,6 +459,14 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
       Vec[] uvecs = null;
 
       try {
+        checkMemoryFootPrint();   // check memory footprint here
+        if (_wideDataset && _train.anyVec().nChunks()==1 && _parms._svd_method == SVDParameters.Method.Power) {
+          _parms._auto_rebalance = false; // GLRM, Randomized does not care about this.
+        }
+        if (_train.anyVec().nChunks()==1 && (_parms._svd_method == SVDParameters.Method.GramSVD ||
+                _parms._svd_method == SVDParameters.Method.Power)) { // disable re-balance which spread chunks around.
+          _parms._auto_rebalance = false;
+        }
         init(true);   // Initialize parameters
         if (error_count() > 0) throw new IllegalArgumentException("Found validation errors: " + validationErrors());
 
@@ -480,13 +488,13 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
           DKV.put(tranRebalanced._key, tranRebalanced);
           _train = Rapids.exec(String.format("(na.omit %s)", tranRebalanced._key)).getFrame(); // remove NA rows
           DKV.remove(tranRebalanced._key);
+          checkMemoryFootPrint();
         }
         dinfo = new DataInfo(_train, _valid, 0, _parms._use_all_factor_levels, _parms._transform,
                 DataInfo.TransformType.NONE, /* skipMissing */ !_parms._impute_missing, /* imputeMissing */
                 _parms._impute_missing, /* missingBucket */ false, /* weights */ false,
                 /* offset */ false, /* fold */ false, /* intercept */ false);
         DKV.put(dinfo._key, dinfo);
-        checkMemoryFootPrint();
 
         if (!_parms._impute_missing && frameHasNas) {
           // fixed the std and mean of dinfo to that of the frame before removing NA rows

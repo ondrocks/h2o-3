@@ -12,7 +12,7 @@ test.pca.la1s <- function() {
   browser()
   dataR = h2o.importFile("bigdata/laptop/jira/la1s.wc.arff.txt.zip",sep=',',destination_frame = "data",header = T, parse=FALSE)
   data <- h2o.parseRaw(dataR, destination_frame = "bigParse",
-                              parse_type = "CSV", chunk_size = 124022500, header = T)
+                              parse_type = "CSV", chunk_size=124022500, header = T) # chunk_size = 124022500 size works
   data$CLASS_LABEL = NULL
 
   for (runIndex in 1:num_run) {

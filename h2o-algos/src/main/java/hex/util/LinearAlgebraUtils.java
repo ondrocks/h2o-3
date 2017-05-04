@@ -17,6 +17,8 @@ import water.fvec.NewChunk;
 import water.fvec.Vec;
 import water.util.ArrayUtils;
 
+import java.util.Arrays;
+
 public class LinearAlgebraUtils {
   /*
    * Forward substitution: Solve Lx = b for x with L = lower triangular matrix, b = real vector
@@ -169,6 +171,7 @@ public class LinearAlgebraUtils {
       _ncolA = ainfo._adaptedFrame.numCols();
       _ncolExp = numColsExp(ainfo._adaptedFrame,true);
       _ncolQ = ncolQ;
+      _atq = new double[_ncolExp][_ncolQ];
     }
 
     public SMulTask(DataInfo ainfo, int ncolQ, int ncolExp) {
@@ -176,11 +179,19 @@ public class LinearAlgebraUtils {
       _ncolA = ainfo._adaptedFrame.numCols();
       _ncolExp = ncolExp;   // when call from GLRM or PCA
       _ncolQ = ncolQ;
+      _atq = new double[_ncolExp][_ncolQ];
+    }
+    // avoid memory allocation with this one
+    public SMulTask(DataInfo ainfo, int ncolQ, double[][] atq) {
+      this(ainfo, ncolQ);
+      _atq = atq; // zero out the entries before proceeding
+      for (int index = 0; index < atq.length; index++) {
+        Arrays.fill(_atq[index], 0);
+      }
     }
 
     @Override public void map(Chunk cs[]) {
       assert (_ncolA + _ncolQ) == cs.length;
-      _atq = new double[_ncolExp][_ncolQ];
 
       for(int k = _ncolA; k < (_ncolA + _ncolQ); k++) {
         // Categorical columns
