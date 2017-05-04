@@ -6,6 +6,7 @@ import hex.Model;
 import hex.ModelBuilder;
 import hex.StackedEnsembleModel;
 import hex.deeplearning.DeepLearningModel;
+import hex.deepwater.DeepWaterParameters;
 import hex.glm.GLMModel;
 import hex.grid.Grid;
 import hex.grid.GridSearch;
@@ -14,6 +15,7 @@ import hex.splitframe.ShuffleSplitFrame;
 import hex.tree.SharedTreeModel;
 import hex.tree.drf.DRFModel;
 import hex.tree.gbm.GBMModel;
+import hex.deepwater.DeepWaterModel;
 import water.*;
 import water.api.schemas3.ImportFilesV3;
 import water.api.schemas3.KeyV3;
@@ -760,6 +762,18 @@ public final class AutoML extends Lockable<AutoML> implements TimedH2ORunnable {
     return ensembleJob;
   }
 
+  Job<DeepWaterModel>defaulDeepWater() {
+    if (exceededSearchLimits("DeepWater")) return null;
+
+    DeepWaterParameters deepWaterParameters = new DeepWaterParameters();
+    setCommonModelBuilderParams(deepWaterParameters);
+
+    deepWaterParameters._stopping_tolerance = this.buildSpec.build_control.stopping_criteria.stopping_tolerance();
+
+    Job deepWaterJob = trainModel(null, "drf", deepWaterParameters);
+    return deepWaterJob;
+  }
+
   // manager thread:
   //  1. Do extremely cursory pass over data and gather only the most basic information.
   //
@@ -791,6 +805,12 @@ public final class AutoML extends Lockable<AutoML> implements TimedH2ORunnable {
     job.update(20, "Computed dataset metadata");
 
     isClassification = frameMetadata.isClassification();
+
+    ///////////////////////////////////////////////////////////
+    // build a DeepWater model
+    ///////////////////////////////////////////////////////////
+    Job<DeepWaterModel>defaultDeepWaterJob = defaulDeepWater();
+    pollAndUpdateProgress(Stage.ModelTraining, "Default DeepWater build", 50, this.job(), defaultDeepWaterJob, JobType.ModelBuild);
 
     ///////////////////////////////////////////////////////////
     // build a fast RF with default settings...
