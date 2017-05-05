@@ -177,7 +177,7 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       pca._output._std_deviation = mult(svd._output._d, 1.0 / Math.sqrt(svd._output._nobs - 1.0));
       pca._output._eigenvectors_raw = svd._output._v;
       // Since gram = X'X/n, but variance requires n-1 in denominator
-      pca._output._total_variance = gram.diagSum()*pca._output._nobs/(pca._output._nobs-1.0);
+      pca._output._total_variance = gram != null?gram.diagSum()*pca._output._nobs/(pca._output._nobs-1.0):svd._output._total_variance;
       buildTables(pca, svd._output._names_expanded);
     }
 
@@ -269,8 +269,6 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
         if (error_count() > 0) {
           throw new IllegalArgumentException("Found validation errors: " + validationErrors());
         }
-
-
 
         // The model to be built
         model = new PCAModel(dest(), _parms, new PCAModel.PCAOutput(PCA.this));
@@ -405,9 +403,14 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
 
           // Recover PCA results from SVD model
           _job.update(1, "Computing stats from SVD");
-          GramTask gtsk = new GramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
-          gram = gtsk._gram;   // TODO: This ends up with all NaNs if training data has too many missing values
-          computeStatsFillModel(model, svd, gram);
+
+          if (_parms._pca_method == PCAParameters.Method.Randomized && _wideDataset ) {
+            GramTask gtsk = new GramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
+            gram = gtsk._gram;   // TODO: This ends up with all NaNs if training data has too many missing values*/
+            computeStatsFillModel(model, svd, gram);
+          } else {
+            computeStatsFillModel(model, svd, null);
+          }
           model._output._scoring_history = svd._output._scoring_history;
         } else if(_parms._pca_method == PCAParameters.Method.GLRM) {
           GLRMModel.GLRMParameters parms = new GLRMModel.GLRMParameters();

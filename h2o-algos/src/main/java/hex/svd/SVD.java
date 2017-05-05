@@ -132,9 +132,7 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
         _ncolExp = LinearAlgebraUtils.numColsExp(_train,_parms._use_all_factor_levels);
     if (_ncolExp > MAX_COLS_EXPANDED) {
       warn("_train", "_train has " + _ncolExp + " columns when categoricals are expanded. " +
-              "Algorithm may be slow.  Do not use the Randomized method for wide dataset which can be slow.  " +
-              "Choose Power instead.  If SVD still runs slow, try to set chunk_size to be higher than dataset file " +
-              "size during dataset parsing.");
+              "Algorithm may be slow.");
     }
 
     if(_parms._nv < 1 || _parms._nv > _ncolExp)
@@ -482,7 +480,6 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
           double t1 = System.currentTimeMillis();
           // two schemes to look at: which one is faster?
           // scheme 1
-          model._output._v = (new SMulTask(dinfo, _parms._nv, _ncolExp).doAll(avfrm))._atq;
           // Perform T(A)*U and V is in _atq.  Need to be scaled by svd.
           model._output._v = ArrayUtils.transpose(ArrayUtils.div(ArrayUtils.transpose(model._output._v),
                   model._output._d));
@@ -544,13 +541,15 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
 
       try {
         checkMemoryFootPrint();   // check memory footprint here
-        if (_wideDataset && _train.anyVec().nChunks()==1 && _parms._svd_method == SVDParameters.Method.Power) {
+
+/*        if (_wideDataset && _train.anyVec().nChunks()==1 && _parms._svd_method == SVDParameters.Method.Power) {
           _parms._auto_rebalance = false; // GLRM, Randomized does not care about this.
         }
         if (_train.anyVec().nChunks()==1 && (_parms._svd_method == SVDParameters.Method.GramSVD ||
                 _parms._svd_method == SVDParameters.Method.Power)) { // disable re-balance which spread chunks around.
           _parms._auto_rebalance = false;
-        }
+        }*/
+
         init(true);   // Initialize parameters
         if (error_count() > 0) throw new IllegalArgumentException("Found validation errors: " + validationErrors());
 
