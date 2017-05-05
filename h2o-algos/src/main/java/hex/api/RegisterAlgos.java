@@ -3,6 +3,7 @@ package hex.api;
 import water.H2O;
 import hex.ModelBuilder;
 import water.api.GridSearchHandler;
+import water.api.ModelsHandler;
 
 public class RegisterAlgos extends water.api.AbstractRegister {
   // Register the algorithms and their builder handlers:
@@ -67,5 +68,12 @@ public class RegisterAlgos extends water.api.AbstractRegister {
 
     H2O.register("POST /3/DataInfoFrame",MakeGLMModelHandler.class, "getDataInfoFrame", "glm_datainfo_frame",
         "Test only");
+
+    H2O.register("POST /3/InterpretModel/", InterpretHandler.class,"makeInterpretModel","makeInterpretModel",
+            "Run Interpretability algorithms on specified model and frame.");
+
+    H2O.register("GET /3/InterpretModel/{name}",InterpretHandler.class,"fetchInterpretModel","fetchInterpretModel",
+            "Fetch interpret model data");
+
   }
 }
