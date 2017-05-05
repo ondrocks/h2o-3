@@ -494,16 +494,15 @@ public final class Gram extends Iced<Gram> {
     for( int i = 0; i < N; ++i )
       xx[i] = MemoryManager.malloc8d(lowerDiag?i+1:N);
 
-    return getXX(xx, false, lowerDiag, icptFist);
+    return getXX(xx, lowerDiag, icptFist);
   }
 
-  public double[][]getXX(double[][] xalloc, boolean zeroOut) { return getXX(xalloc, zeroOut, false, false);}
-  public double[][] getXX(double[][] xalloc, boolean zeroOut, boolean lowerDiag, boolean icptFist) {
-    if (zeroOut) {
-      int xlen = xalloc.length;
-      for (int rowInd = 0; rowInd < xlen; rowInd++) {
-        Arrays.fill(xalloc[rowInd], 0.0);
-      }
+  public double[][]getXX(double[][] xalloc) { return getXX(xalloc,false, false);}
+  public double[][] getXX(double[][] xalloc, boolean lowerDiag, boolean icptFist) {
+
+    int xlen = xalloc.length;
+    for (int rowInd = 0; rowInd < xlen; rowInd++) {
+      Arrays.fill(xalloc[rowInd], 0.0);
     }
 
     int off = 0;
@@ -523,7 +522,6 @@ public final class Gram extends Iced<Gram> {
           xalloc[j + off][i + _diag.length + off] = _xx[i][j];
       }
     }
-
     return xalloc;
   }
 

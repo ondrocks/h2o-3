@@ -23,6 +23,7 @@ import water.fvec.NewChunk;
 import water.fvec.Vec;
 import water.rapids.Rapids;
 import water.util.ArrayUtils;
+import water.util.Log;
 import water.util.PrettyPrint;
 import water.util.TwoDimTable;
 
@@ -33,6 +34,7 @@ import java.util.List;
 
 import static hex.util.DimensionReductionUtils.createScoringHistoryTableDR;
 import static hex.util.DimensionReductionUtils.transformEigenVectors;
+import static java.lang.StrictMath.sqrt;
 import static water.util.ArrayUtils.*;
 
 /**
@@ -44,7 +46,7 @@ import static water.util.ArrayUtils.*;
  */
 public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.SVDOutput> {
   // Convergence tolerance
-  private final double TOLERANCE = 1e-8;    // Cutoff for estimation error of right singular vector
+  private final double TOLERANCE = 1e-16;    // Cutoff for estimation error of right singular vector
   private final double EPS = TOLERANCE*TOLERANCE;         // cutoff if vector norm is too small
 
   // Maximum number of columns when categoricals expanded
@@ -306,8 +308,12 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
     // This function keeps track of change in Q each iteration ||Q_j - Q_{j-1}||_2 to check convergence
     private Frame randSubIter(DataInfo dinfo, SVDModel model) {
       DataInfo yinfo = null;
-      Frame ybig = null, qfrm = null;
+      Frame ybig = null, qfrm = null, ysmallF = null, ysmallqfrm = null;
       final int ncolA = dinfo._adaptedFrame.numCols();
+      double[][] atq =null;
+      double[][] xx = null;
+      double[][] ysmall_q = null;
+      DataInfo ysmallInfo = null;
 
       try {
         // 1) Initialize Y = AG where G ~ N(0,1) and compute Y = QR factorization
@@ -319,13 +325,12 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
         Frame yqfrm = new Frame(ybig);
         for (int i = 0; i < _parms._nv; i++)
           yqfrm.add("qcol_" + i, yqfrm.anyVec().makeZero());
-     //   yqfrm.add(LinearAlgebraUtils.generateFrameOfZeros((int) ybig.numRows(), ybig.numCols()));
 
         // Calculate Cholesky of Gram to get R' = L matrix
         _job.update(1, "Computing QR factorization of Y");
         yinfo = new DataInfo(ybig, null, true, DataInfo.TransformType.NONE, true, false, false);
         DKV.put(yinfo._key, yinfo);
-        LinearAlgebraUtils.computeQ(_job._key, yinfo, yqfrm);
+         LinearAlgebraUtils.computeQ(_job._key, yinfo, yqfrm, xx);
 
         if (yqfrm.hasInfs()) {  // dataset is rank deficient, reduce _nv to fit the true rank better
           _matrixRankReached=true;  // count when bad infinity or NaNs appear to denote problem;
@@ -351,36 +356,58 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
         // Note: If A is n by p (p = num cols with categoricals expanded), then \tilde{Q} is p by k and Q is n by k
         Frame ayqfrm = new Frame(dinfo._adaptedFrame);
         ayqfrm.add(ybig);
-       // ayqfrm.add(LinearAlgebraUtils.generateFrameOfZeros((int) ybig.numRows(), _parms._nv));
         for (int i = 0; i < _parms._nv; i++)
           ayqfrm.add("qcol_" + i, ayqfrm.anyVec().makeZero());
         Frame ayfrm = ayqfrm.subframe(0, ncolA + _parms._nv);   // [A,Y]
         Frame aqfrm = ayqfrm.subframe(0, ncolA);
         aqfrm.add(ayqfrm.subframe(ncolA + _parms._nv, ayqfrm.numCols()));   // [A,Q]
         yqfrm = ayqfrm.subframe(ncolA, ayqfrm.numCols());   // [Y,Q]
-        LinearAlgebraUtils.computeQ(_job._key, yinfo, yqfrm);
+        xx = MemoryManager.malloc8d(_parms._nv, _parms._nv);
+        LinearAlgebraUtils.computeQ(_job._key, yinfo, yqfrm, xx);
 
         model._output._iterations = 0;
         long qobs = dinfo._adaptedFrame.numRows() * _parms._nv;    // Number of observations in Q
         double qerr = 2 * TOLERANCE * qobs;   // Stop when average SSE between Q_j and Q_{j-2} below tolerance
         double average_SEE = qerr / qobs;
+        atq = MemoryManager.malloc8d(_ncolExp, _parms._nv);
+
+        int wEndCol = 2*_parms._nv-1;
+        int wEndColR = _parms._nv-1;
 
         while ((model._output._iterations < 10 || average_SEE > TOLERANCE) && model._output._iterations < _parms._max_iterations) {   // Run at least 10 iterations before tolerance cutoff
           if(stop_requested()) break;
           _job.update(1, "Iteration " + String.valueOf(model._output._iterations+1) + " of randomized subspace iteration");
 
           // 2) Form \tilde{Y}_j = A'Q_{j-1} and compute \tilde{Y}_j = \tilde{Q}_j \tilde{R}_j factorization
-          SMulTask stsk = new SMulTask(dinfo, _parms._nv, _ncolExp);
+          SMulTask stsk = new SMulTask(dinfo, _parms._nv, _ncolExp, atq);
           stsk.doAll(aqfrm);    // Pass in [A,Q]
 
-          Matrix ysmall = new Matrix(stsk._atq);
-          QRDecomposition ysmall_qr = new QRDecomposition(ysmall);
-          double[][] ysmall_q = ysmall_qr.getQ().getArray();
+          if (_wideDataset) {
+            if (model._output._iterations==0) {
+              ysmallF = new water.util.ArrayUtils().frame(stsk._atq);
+              ysmallInfo = new DataInfo(ysmallF, null, true, DataInfo.TransformType.NONE,
+                      true, false, false);
+              DKV.put(ysmallInfo._key, ysmallInfo);
+              ysmall_q = MemoryManager.malloc8d(_ncolExp, _parms._nv);
+              ysmallqfrm = new Frame(ysmallF);
+              for (int i = 0; i < _parms._nv; i++)      // pray that _nv is small
+                ysmallqfrm.add("qcol_" + i, ysmallqfrm.anyVec().makeZero());
+            } else {  // replace content of ysmallqfrm with new contents in _atq,
+              new CopyArrayToFrame(0, wEndColR, _ncolExp, stsk._atq).doAll(ysmallqfrm);
+            }
+            LinearAlgebraUtils.computeQ(_job._key, ysmallInfo, ysmallqfrm, xx);
+            ysmall_q = new FrameToArray(_parms._nv, wEndCol, _ncolExp, ysmall_q).doAll(ysmallqfrm).getArray();
 
-          // 3) Form Y_j = A\tilde{Q}_j and compute Y_j = Q_jR_j factorization
+          } else { // let ysmall as 2-D double array
+            Matrix ysmall = new Matrix(stsk._atq);  // small only for n_exp << m.  Not for wide dataset.
+            QRDecomposition ysmall_qr = new QRDecomposition(ysmall);
+            ysmall_q = ysmall_qr.getQ().getArray();  // memory allocation here too.
+          }
+
+          // 3) Form Y_j = A\tilde{Q}_j and compute Y_j = Q_jR_j factorization (ybig)
           BMulInPlaceTask tsk = new BMulInPlaceTask(dinfo, ArrayUtils.transpose(ysmall_q), _ncolExp);
           tsk.doAll(ayfrm);
-          qerr = LinearAlgebraUtils.computeQ(_job._key, yinfo, yqfrm);
+          qerr = LinearAlgebraUtils.computeQ(_job._key, yinfo, yqfrm, xx);
           average_SEE = qerr/qobs;
           model._output._iterations++;
 
@@ -400,6 +427,9 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
       } finally {
         if( yinfo != null ) yinfo.remove();
         if( ybig != null ) ybig.delete();
+        if (ysmallInfo != null) ysmallInfo.remove();
+        if (ysmallF != null) ysmallF.delete();
+        if (ysmallqfrm != null) ysmallqfrm.delete();
       }
       return qfrm;
     }
@@ -415,36 +445,90 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
       final int ncolA = dinfo._adaptedFrame.numCols();
 
       try {
-        // 0) Make input frame [A,Q], where A = read-only training data, Q = matrix from randomized subspace iteration
-        Vec[] vecs = new Vec[ncolA + _parms._nv];
-        for (int i = 0; i < ncolA; i++) vecs[i] = dinfo._adaptedFrame.vec(i);
-        for (int i = 0; i < _parms._nv; i++) vecs[ncolA + i] = qfrm.vec(i);
-        Frame aqfrm = new Frame(vecs);
 
-        // 1) Form the matrix B' = A'Q = (Q'A)'
-        _job.update(1, "Forming small matrix B = Q'A for direct SVD");
-        SMulTask stsk = new SMulTask(dinfo, _parms._nv, _ncolExp);
-        stsk.doAll(aqfrm);
+        double nOnm1 = model._output._nobs/(model._output._nobs-1.0);
+        double seigV  = sqrt(model._output._nobs);
 
-        // 2) Compute SVD of small matrix: If B' = WDV', then B = VDW'
-        _job.update(1, "Calculating SVD of small matrix locally");
-        Matrix atqJ = new Matrix(stsk._atq);
-        SingularValueDecomposition svdJ = atqJ.svd();
+        if (_wideDataset) { // for wide dataset, the final eigenvector is the eigenvector of outer gram!
+          Gram.OuterGramTask ogtsk = new Gram.OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
+          Matrix gramJ = new Matrix(ogtsk._gram.getXX());
+          SingularValueDecomposition svdJ = gramJ.svd();
+          double[][] svdJ_u = svdJ.getV().getMatrix(0, gramJ.getColumnDimension() - 1, 0,
+                  _parms._nv - 1).getArray();
 
-        // 3) Form orthonormal matrix U = QV
-        _job.update(1, "Forming distributed orthonormal matrix U");
-        if (_parms._keep_u) {
-          model._output._u_key = Key.make(u_name);
-          double[][] svdJ_u = svdJ.getV().getMatrix(0,atqJ.getColumnDimension()-1,0,_parms._nv-1).getArray();
-          qinfo = new DataInfo(qfrm, null, true, DataInfo.TransformType.NONE, false, false, false);
-          DKV.put(qinfo._key, qinfo);
-          BMulTask btsk = new BMulTask(_job._key, qinfo, ArrayUtils.transpose(svdJ_u));
-          btsk.doAll(_parms._nv, Vec.T_NUM, qinfo._adaptedFrame);
-          u = btsk.outputFrame(model._output._u_key, null, null);
+          if (_parms._keep_u) {
+            model._output._u_key = Key.make(u_name);
+            u = new water.util.ArrayUtils().frame(svdJ_u);
+
+          }
+          model._output._total_variance = ogtsk._gram.diagSum()*nOnm1;  // can calculate this for PCA here.
+          model._output._d = ArrayUtils.mult(Arrays.copyOfRange(ArrayUtils.sqrtArr(svdJ.getSingularValues()),
+                  0, _parms._nv), seigV);
+
+          // to get v, we need to do T(A)*U*D^-1
+          // stuff A and U into a frame
+          Vec[] vecs = new Vec[ncolA];
+          for (int i = 0; i < ncolA; i++) vecs[i] = dinfo._adaptedFrame.vec(i);
+          Frame avfrm = new Frame(vecs);
+          Frame fromSVD = null;
+
+          if (u==null) {
+            fromSVD = new water.util.ArrayUtils().frame(svdJ_u);
+            avfrm.add(fromSVD);
+          } else {
+            avfrm.add(u);
+          }
+          model._output._v = (new SMulTask(dinfo, _parms._nv, _ncolExp).doAll(avfrm))._atq;
+          double t1 = System.currentTimeMillis();
+          // two schemes to look at: which one is faster?
+          // scheme 1
+          model._output._v = (new SMulTask(dinfo, _parms._nv, _ncolExp).doAll(avfrm))._atq;
+          // Perform T(A)*U and V is in _atq.  Need to be scaled by svd.
+          model._output._v = ArrayUtils.transpose(ArrayUtils.div(ArrayUtils.transpose(model._output._v),
+                  model._output._d));
+
+          // scheme 2
+          // Perform T(A)*U and V is in _atq.  Need to be scaled by svd.
+         /* Frame vFrame = new water.util.ArrayUtils().frame(model._output._v);
+          DivideU utsk = new DivideU(model._output._d);
+          utsk.doAll(vFrame);
+          model._output._v = new FrameToArray(0, _parms._nv-1, _ncolExp,
+                  model._output._v).doAll(vFrame).getArray(); */
+          double telapse = System.currentTimeMillis()-t1;
+          Log.info("Elapsed time for scheme"+telapse);
+          if (fromSVD != null) fromSVD.delete();
+        } else {
+          // 0) Make input frame [A,Q], where A = read-only training data, Q = matrix from randomized subspace iteration
+          Vec[] vecs = new Vec[ncolA + _parms._nv];
+          for (int i = 0; i < ncolA; i++) vecs[i] = dinfo._adaptedFrame.vec(i);
+          for (int i = 0; i < _parms._nv; i++) vecs[ncolA + i] = qfrm.vec(i);
+          Frame aqfrm = new Frame(vecs);
+
+          // 1) Form the matrix B' = A'Q = (Q'A)'
+          _job.update(1, "Forming small matrix B = Q'A for direct SVD");
+          SMulTask stsk = new SMulTask(dinfo, _parms._nv, _ncolExp);
+          stsk.doAll(aqfrm);  // _atq size is _ncolExp by _nv
+
+          // 2) Compute SVD of small matrix: If B' = WDV', then B = VDW'
+          _job.update(1, "Calculating SVD of small matrix locally");
+          Matrix atqJ = new Matrix(stsk._atq);
+          SingularValueDecomposition svdJ = atqJ.svd();
+
+          // 3) Form orthonormal matrix U = QV
+          _job.update(1, "Forming distributed orthonormal matrix U");
+          if (_parms._keep_u) {
+            model._output._u_key = Key.make(u_name);
+            double[][] svdJ_u = svdJ.getV().getMatrix(0, atqJ.getColumnDimension() - 1, 0, _parms._nv - 1).getArray();
+            qinfo = new DataInfo(qfrm, null, true, DataInfo.TransformType.NONE, false, false, false);
+            DKV.put(qinfo._key, qinfo);
+            BMulTask btsk = new BMulTask(_job._key, qinfo, ArrayUtils.transpose(svdJ_u));
+            btsk.doAll(_parms._nv, Vec.T_NUM, qinfo._adaptedFrame);
+            u = btsk.outputFrame(model._output._u_key, null, null);
+          }
+
+          model._output._d = Arrays.copyOfRange(svdJ.getSingularValues(), 0, _parms._nv);
+          model._output._v = svdJ.getU().getMatrix(0, atqJ.getRowDimension() - 1, 0, _parms._nv - 1).getArray();
         }
-
-        model._output._d = Arrays.copyOfRange(svdJ.getSingularValues(),0,_parms._nv);
-        model._output._v = svdJ.getU().getMatrix(0,atqJ.getRowDimension()-1,0,_parms._nv-1).getArray();
       } finally {
         if( qinfo != null ) qinfo.remove();
       }
@@ -532,14 +616,16 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
           // Output diagonal of D
           _job.update(1, "Computing stats from SVD");
           double[] sval = svdJ.getSingularValues();
-          model._output._d = new double[_parms._nv];    // Only want rank = nv diagonal values
+          model._output._d = MemoryManager.malloc8d(_parms._nv);
+         // model._output._d = new double[_parms._nv];    // Only want rank = nv diagonal values
           for(int k = 0; k < _parms._nv; k++)
             model._output._d[k] = Math.sqrt(sval[k] * model._output._nobs);
 
           // Output right singular vectors V
           double[][] v = svdJ.getV().getArray();
           assert v.length == _ncolExp && LinearAlgebraUtils.numColsExp(dinfo._adaptedFrame,_parms._use_all_factor_levels) == _ncolExp;
-          model._output._v = new double[_ncolExp][_parms._nv];  // Only want rank = nv decomposition
+          model._output._v = MemoryManager.malloc8d(_ncolExp, _parms._nv);
+         // model._output._v = new double[_ncolExp][_parms._nv];  // Only want rank = nv decomposition
           for(int i = 0; i < v.length; i++)
             System.arraycopy(v[i], 0, model._output._v[i], 0, _parms._nv);
 
@@ -568,8 +654,8 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
           double[][] gramArrays = null;       // store outergram as a double array
           double[][] gramUpdatesW = null;     // store the result of (I-sum vi*T(vi))*A*T(A)*(I-sum vi*T(vi))
 
-          _estimatedSingularValues = new double[_parms._nv];  // allocate memory once
-
+          //_estimatedSingularValues = new double[_parms._nv];  // allocate memory once
+          _estimatedSingularValues = MemoryManager.malloc8d(_parms._nv);
           if (_wideDataset) {
             ogtsk = new Gram.OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
             gram = ogtsk._gram;
@@ -588,9 +674,13 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
           // 1) Run one iteration of power method
           _job.update(1, "Iteration 1 of power method");     // One unit of work
           // 1a) Initialize right singular vector v_1
-          model._output._v = new double[_parms._nv][eigVecLen];  // Store V' for ease of use and transpose back at end
-          randomInitialV = new double[eigVecLen];   // allocate memroy for randomInitialV and finalV once, save time
-          finalV = new double[eigVecLen];
+          model._output._v = MemoryManager.malloc8d(_parms._nv, eigVecLen);
+         // model._output._v = new double[_parms._nv][eigVecLen];  // Store V' for ease of use and transpose back at end
+          randomInitialV = MemoryManager.malloc8d(eigVecLen);
+         // randomInitialV = new double[eigVecLen];   // allocate memroy for randomInitialV and finalV once, save time
+          finalV = MemoryManager.malloc8d(eigVecLen);
+
+          //finalV = new double[eigVecLen];
           model._output._v[0] = Arrays.copyOf(powerLoop(gram, _parms._seed, model, randomInitialV, finalV, 0),
                   eigVecLen);
 
