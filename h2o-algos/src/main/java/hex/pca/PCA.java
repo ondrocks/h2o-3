@@ -23,7 +23,6 @@ import water.HeartBeat;
 import water.Job;
 import water.fvec.Frame;
 import water.rapids.Rapids;
-import water.util.Log;
 import water.util.PrettyPrint;
 import water.util.TwoDimTable;
 
@@ -121,11 +120,11 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       error("_use_all_factor_levels", "GLRM only implemented for _use_all_factor_levels = true");
     }
 
-/*    if (_parms._pca_method != PCAParameters.Method.GLRM && expensive && error_count() == 0) {
+    if (_parms._pca_method != PCAParameters.Method.GLRM && expensive && error_count() == 0) {
       if (!(_train.hasNAs()) || _parms._impute_missing)  {
         checkMemoryFootPrint();  // perform memory check here if dataset contains no NAs or if impute_missing enabled
       }
-    }*/
+    }
   }
 
   class PCADriver extends Driver {
@@ -257,14 +256,6 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
       Gram gram = null;
 
       try {
-        checkMemoryFootPrint();   // check memory footprint here
-        if (_wideDataset) {
-          _parms._auto_rebalance = false;   // no rebalance, all in one big block, no multi-thread.
-        }
-/*        if (_wideDataset && _train.anyVec().nChunks()==1 && (_parms._pca_method == PCAParameters.Method.GramSVD ||
-                _parms._pca_method == PCAParameters.Method.Power)) { // disable re-balance which spread chunks around.
-          _parms._auto_rebalance = false; // GLRM, Randomized does not care about this.
-        }*/
         init(true);   // Initialize parameters
         if (error_count() > 0) {
           throw new IllegalArgumentException("Found validation errors: " + validationErrors());
@@ -318,11 +309,8 @@ public class PCA extends ModelBuilder<PCAModel,PCAModel.PCAParameters,PCAModel.P
           GramTask gtsk = null;
 
           if (_wideDataset) {
-            double t1 = System.currentTimeMillis();
             ogtsk = new OuterGramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);
             gram = ogtsk._gram;
-            double t2 = System.currentTimeMillis()-t1;
-            Log.info("****  Gram time is "+t2);
             model._output._nobs = ogtsk._nobs;
           } else {
             gtsk = new GramTask(_job._key, dinfo).doAll(dinfo._adaptedFrame);

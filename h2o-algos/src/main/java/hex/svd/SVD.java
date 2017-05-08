@@ -23,7 +23,6 @@ import water.fvec.NewChunk;
 import water.fvec.Vec;
 import water.rapids.Rapids;
 import water.util.ArrayUtils;
-import water.util.Log;
 import water.util.PrettyPrint;
 import water.util.TwoDimTable;
 
@@ -138,11 +137,11 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
     if(_parms._nv < 1 || _parms._nv > _ncolExp)
       error("_nv", "Number of right singular values must be between 1 and " + _ncolExp);
 
-/*    if (expensive && error_count() == 0) {
+    if (expensive && error_count() == 0) {
       if (!(_train.hasNAs()) || _parms._impute_missing)  {
         checkMemoryFootPrint();  // perform memory check here if dataset contains no NAs or if impute_missing enabled
       }
-    }*/
+    }
   }
 
   // Compute ivv_sum - vec * vec' for symmetric array ivv_sum
@@ -477,23 +476,13 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
             avfrm.add(u);
           }
           model._output._v = (new SMulTask(dinfo, _parms._nv, _ncolExp).doAll(avfrm))._atq;
-          double t1 = System.currentTimeMillis();
-          // two schemes to look at: which one is faster?
-          // scheme 1
+
           // Perform T(A)*U and V is in _atq.  Need to be scaled by svd.
           model._output._v = ArrayUtils.transpose(ArrayUtils.div(ArrayUtils.transpose(model._output._v),
                   model._output._d));
 
-          // scheme 2
-          // Perform T(A)*U and V is in _atq.  Need to be scaled by svd.
-         /* Frame vFrame = new water.util.ArrayUtils().frame(model._output._v);
-          DivideU utsk = new DivideU(model._output._d);
-          utsk.doAll(vFrame);
-          model._output._v = new FrameToArray(0, _parms._nv-1, _ncolExp,
-                  model._output._v).doAll(vFrame).getArray(); */
-          double telapse = System.currentTimeMillis()-t1;
-          Log.info("Elapsed time for scheme"+telapse);
           if (fromSVD != null) fromSVD.delete();
+
         } else {
           // 0) Make input frame [A,Q], where A = read-only training data, Q = matrix from randomized subspace iteration
           Vec[] vecs = new Vec[ncolA + _parms._nv];
@@ -540,16 +529,6 @@ public class SVD extends ModelBuilder<SVDModel,SVDModel.SVDParameters,SVDModel.S
       Vec[] uvecs = null;
 
       try {
-        checkMemoryFootPrint();   // check memory footprint here
-
-/*        if (_wideDataset && _train.anyVec().nChunks()==1 && _parms._svd_method == SVDParameters.Method.Power) {
-          _parms._auto_rebalance = false; // GLRM, Randomized does not care about this.
-        }
-        if (_train.anyVec().nChunks()==1 && (_parms._svd_method == SVDParameters.Method.GramSVD ||
-                _parms._svd_method == SVDParameters.Method.Power)) { // disable re-balance which spread chunks around.
-          _parms._auto_rebalance = false;
-        }*/
-
         init(true);   // Initialize parameters
         if (error_count() > 0) throw new IllegalArgumentException("Found validation errors: " + validationErrors());
 
